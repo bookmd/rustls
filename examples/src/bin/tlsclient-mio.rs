@@ -491,7 +491,9 @@ fn main() {
         .try_into()
         .expect("invalid DNS name");
     let mut tlsclient = TlsClient::new(sock, server_name, config);
-
+    println!("Connected to {}", args.arg_hostname);
+    // print serialized config
+    // println!("{:?}", tlsclient.tls_conn.inner);
     if args.flag_http {
         let httpreq = format!(
             "GET / HTTP/1.0\r\nHost: {}\r\nConnection: \

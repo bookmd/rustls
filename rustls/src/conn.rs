@@ -13,6 +13,10 @@ use crate::vecbuf::ChunkVecBuffer;
 use core::fmt::Debug;
 use core::mem;
 use core::ops::{Deref, DerefMut};
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::io::prelude::*;
+
 use std::io;
 
 /// A client or server connection.
@@ -28,7 +32,7 @@ impl Connection {
     /// Read TLS content from `rd`.
     ///
     /// See [`ConnectionCommon::read_tls()`] for more information.
-    pub fn read_tls(&mut self, rd: &mut dyn io::Read) -> Result<usize, io::Error> {
+    pub fn read_tls(&mut self, rd: &mut dyn Read) -> Result<usize, io::Error> {
         match self {
             Self::Client(conn) => conn.read_tls(rd),
             Self::Server(conn) => conn.read_tls(rd),
@@ -38,7 +42,7 @@ impl Connection {
     /// Writes TLS messages to `wr`.
     ///
     /// See [`ConnectionCommon::write_tls()`] for more information.
-    pub fn write_tls(&mut self, wr: &mut dyn io::Write) -> Result<usize, io::Error> {
+    pub fn write_tls(&mut self, wr: &mut dyn Write) -> Result<usize, io::Error> {
         self.sendable_tls.write_to(wr)
     }
 
@@ -98,7 +102,7 @@ impl Connection {
     pub fn complete_io<T>(&mut self, io: &mut T) -> Result<(usize, usize), io::Error>
     where
         Self: Sized,
-        T: io::Read + io::Write,
+        T: Read + Write,
     {
         match self {
             Self::Client(conn) => conn.complete_io(io),
@@ -127,14 +131,14 @@ impl DerefMut for Connection {
     }
 }
 
-/// A structure that implements [`std::io::Read`] for reading plaintext.
+/// A structure that implements [`std::Read`] for reading plaintext.
 pub struct Reader<'a> {
     received_plaintext: &'a mut ChunkVecBuffer,
     peer_cleanly_closed: bool,
     has_seen_eof: bool,
 }
 
-impl<'a> io::Read for Reader<'a> {
+impl<'a> Read for Reader<'a> {
     /// Obtain plaintext data received from the peer over this TLS connection.
     ///
     /// If the peer closes the TLS session cleanly, this returns `Ok(0)`  once all
@@ -245,7 +249,7 @@ impl<T> PlaintextSink for ConnectionCommon<T> {
     }
 }
 
-/// A structure that implements [`std::io::Write`] for writing plaintext.
+/// A structure that implements [`std::Write`] for writing plaintext.
 pub struct Writer<'a> {
     sink: &'a mut dyn PlaintextSink,
 }
@@ -260,7 +264,7 @@ impl<'a> Writer<'a> {
     }
 }
 
-impl<'a> io::Write for Writer<'a> {
+impl<'a> Write for Writer<'a> {
     /// Send the plaintext `buf` to the peer, encrypting
     /// and authenticating it.  Once this function succeeds
     /// you should call [`Connection::write_tls`] which will output the
@@ -368,7 +372,7 @@ impl<Data> ConnectionCommon<Data> {
     pub fn complete_io<T>(&mut self, io: &mut T) -> Result<(usize, usize), io::Error>
     where
         Self: Sized,
-        T: io::Read + io::Write,
+        T: Read + Write,
     {
         let mut eof = false;
         let mut wrlen = 0;
@@ -493,7 +497,7 @@ impl<Data> ConnectionCommon<Data> {
     ///
     /// [`process_new_packets()`]: ConnectionCommon::process_new_packets
     /// [`reader()`]: ConnectionCommon::reader
-    pub fn read_tls(&mut self, rd: &mut dyn io::Read) -> Result<usize, io::Error> {
+    pub fn read_tls(&mut self, rd: &mut dyn Read) -> Result<usize, io::Error> {
         if self.received_plaintext.is_full() {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
@@ -515,7 +519,7 @@ impl<Data> ConnectionCommon<Data> {
     ///
     /// After this function returns, the connection buffer may not yet be fully flushed. The
     /// [`CommonState::wants_write`] function can be used to check if the output buffer is empty.
-    pub fn write_tls(&mut self, wr: &mut dyn io::Write) -> Result<usize, io::Error> {
+    pub fn write_tls(&mut self, wr: &mut dyn Write) -> Result<usize, io::Error> {
         self.sendable_tls.write_to(wr)
     }
 
@@ -597,15 +601,22 @@ pub(crate) struct ConnectionCore<Data> {
     pub(crate) data: Data,
     pub(crate) common_state: CommonState,
     pub(crate) message_deframer: MessageDeframer,
+    pub(crate) packet_log_file: File,
 }
 
 impl<Data> ConnectionCore<Data> {
     pub(crate) fn new(state: Box<dyn State<Data>>, data: Data, common_state: CommonState) -> Self {
+        let file = OpenOptions::new()
+            .write(true)
+            .append(true)
+            .open("data.txt")
+            .unwrap();
         Self {
             state: Ok(state),
             data,
             common_state,
             message_deframer: MessageDeframer::default(),
+            packet_log_file: file,
         }
     }
 
@@ -686,6 +697,14 @@ impl<Data> ConnectionCore<Data> {
         msg: PlainMessage,
         state: Box<dyn State<Data>>,
     ) -> Result<Box<dyn State<Data>>, Error> {
+        // Append message to file
+        let _ = self
+            .packet_log_file
+            .write_all(&msg.payload.0);
+        // Append new line
+        let __ = self
+            .packet_log_file
+            .write_all(b"\n==============================\n");
         // Drop CCS messages during handshake in TLS1.3
         if msg.typ == ContentType::ChangeCipherSpec
             && !self

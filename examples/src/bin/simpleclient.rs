@@ -58,7 +58,12 @@ fn main() {
         ciphersuite.suite()
     )
     .unwrap();
+    let mut client_secret = [0u8; 64];
+    tls.conn
+        .export_keying_material(&mut client_secret, b"label", None)
+        .unwrap();
+    writeln!(&mut std::io::stderr(), "client_secret: {:?}", client_secret);
     let mut plaintext = Vec::new();
     tls.read_to_end(&mut plaintext).unwrap();
-    stdout().write_all(&plaintext).unwrap();
+    // stdout().write_all(&plaintext).unwrap();
 }
